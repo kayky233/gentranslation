@@ -78,6 +78,51 @@ func youtubeDownloadHint(output []byte, cookiesPath string) string {
 	return "可尝试：1) 重试任务 2) 上传 YouTube cookies.txt 3) 检查代理网络。"
 }
 
+func buildYouTubeDownloadArgs(link, audioPath, cookiesPath string) []string {
+	args := []string{
+		"-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/worst",
+		"--extract-audio",
+		"--audio-format", "mp3",
+		"--audio-quality", "192K",
+		"-o", audioPath,
+	}
+	if config.Conf.App.Proxy != "" {
+		args = append(args, "--proxy", config.Conf.App.Proxy)
+	}
+	if _, err := os.Stat(cookiesPath); err == nil {
+		args = append(args, "--cookies", cookiesPath)
+	}
+	if storage.FfmpegPath != "ffmpeg" {
+		args = append(args, "--ffmpeg-location", storage.FfmpegPath)
+	}
+	args = append(args, link)
+	return args
+}
+
+func buildYouTubeFallbackArgs(link, audioPath, cookiesPath string) []string {
+	args := []string{
+		"--extractor-args", "youtube:player_client=tv,ios,android",
+		"--add-header", "Accept-Language:en-US,en;q=0.9",
+		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+		"-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/18/worst",
+		"--extract-audio",
+		"--audio-format", "mp3",
+		"--audio-quality", "192K",
+		"-o", audioPath,
+	}
+	if config.Conf.App.Proxy != "" {
+		args = append(args, "--proxy", config.Conf.App.Proxy)
+	}
+	if _, err := os.Stat(cookiesPath); err == nil {
+		args = append(args, "--cookies", cookiesPath)
+	}
+	if storage.FfmpegPath != "ffmpeg" {
+		args = append(args, "--ffmpeg-location", storage.FfmpegPath)
+	}
+	args = append(args, link)
+	return args
+}
+
 func resolveCookiesPath(stepParam *types.SubtitleTaskStepParam) string {
 	if stepParam != nil && strings.TrimSpace(stepParam.CookiesFilePath) != "" {
 		return strings.TrimSpace(stepParam.CookiesFilePath)
@@ -201,23 +246,7 @@ func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskSt
 		}
 		stepParam.Link = "https://www.youtube.com/watch?v=" + videoId
 		// 使用更灵活的音频格式选择器，避免 HTTP 403 错误
-		cmdArgs := []string{
-			"-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/worst",
-			"--extract-audio",
-			"--audio-format", "mp3",
-			"--audio-quality", "192K",
-			"-o", audioPath,
-			stepParam.Link,
-		}
-		if config.Conf.App.Proxy != "" {
-			cmdArgs = append(cmdArgs, "--proxy", config.Conf.App.Proxy)
-		}
-		if _, err := os.Stat(cookiesPath); err == nil {
-			cmdArgs = append(cmdArgs, "--cookies", cookiesPath)
-		}
-		if storage.FfmpegPath != "ffmpeg" {
-			cmdArgs = append(cmdArgs, "--ffmpeg-location", storage.FfmpegPath)
-		}
+		cmdArgs := buildYouTubeDownloadArgs(stepParam.Link, audioPath, cookiesPath)
 		cmd := exec.Command(storage.YtdlpPath, cmdArgs...)
 		output, err = cmd.CombinedOutput()
 		if err != nil && shouldRetryYouTubeAfterUpdate(output) {
@@ -236,6 +265,19 @@ func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskSt
 			} else {
 				output = append(output, []byte("\n[retry after -U]\n"+string(retryOutput))...)
 				err = retryErr
+			}
+		}
+		if err != nil && strings.Contains(strings.ToLower(string(output)), "sign in to confirm") {
+			// 尝试切换到 tv/ios/android 客户端参数，降低无 cookies 时触发风控概率。
+			fallbackArgs := buildYouTubeFallbackArgs(stepParam.Link, audioPath, cookiesPath)
+			fallbackCmd := exec.Command(storage.YtdlpPath, fallbackArgs...)
+			fallbackOutput, fallbackErr := fallbackCmd.CombinedOutput()
+			if fallbackErr == nil {
+				output = fallbackOutput
+				err = nil
+			} else {
+				output = append(output, []byte("\n[fallback client args]\n"+string(fallbackOutput))...)
+				err = fallbackErr
 			}
 		}
 		if err != nil {
