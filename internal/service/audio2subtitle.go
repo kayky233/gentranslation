@@ -122,6 +122,14 @@ func (s Service) IsSplitUseSpace(language types.StandardLanguageCode) bool {
 	return false
 }
 
+func isModelNotExistError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	return strings.Contains(errText, "model not exist")
+}
+
 func (s Service) splitTextAndTranslateV2(basePath, inputText string, originLang, targetLang types.StandardLanguageCode, enableModalFilter bool, id int) ([]*TranslatedItem, error) {
 	sentences := util.SplitTextSentences(inputText, config.Conf.App.MaxSentenceLength)
 	if len(sentences) == 0 {
@@ -161,9 +169,11 @@ func (s Service) splitTextAndTranslateV2(basePath, inputText string, originLang,
 	sentences = shortSentences
 
 	var (
-		signal  = make(chan struct{}, config.Conf.App.TranslateParallelNum) // 控制最大并发数
-		wg      sync.WaitGroup
-		results = make([]*TranslatedItem, len(sentences))
+		signal   = make(chan struct{}, config.Conf.App.TranslateParallelNum) // 控制最大并发数
+		wg       sync.WaitGroup
+		results  = make([]*TranslatedItem, len(sentences))
+		fatalMu  sync.Mutex
+		fatalErr error
 		// errChan = make(chan error, 1)
 		// mutex   sync.Mutex
 	)
@@ -210,6 +220,13 @@ func (s Service) splitTextAndTranslateV2(basePath, inputText string, originLang,
 			translatedText, err := s.ChatCompleter.ChatCompletion(prompt)
 			if err != nil {
 				log.GetLogger().Error("splitTextAndTranslateV2 llm translate error", zap.Error(err), zap.Any("original text", originText))
+				if isModelNotExistError(err) {
+					fatalMu.Lock()
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("LLM model not exist: %w", err)
+					}
+					fatalMu.Unlock()
+				}
 				results[index] = &TranslatedItem{
 					OriginText:     originText,
 					TranslatedText: originText,
@@ -225,6 +242,9 @@ func (s Service) splitTextAndTranslateV2(basePath, inputText string, originLang,
 	}
 
 	wg.Wait()
+	if fatalErr != nil {
+		return nil, fatalErr
+	}
 	// close(errChan)
 
 	return results, nil
@@ -249,6 +269,9 @@ func (s Service) audioToSrt(ctx context.Context, stepParam *types.SubtitleTaskSt
 	// 更新字幕任务信息
 	stepParam.TaskPtr.ProcessPct = 15
 	segmentNum := len(timePoints) - 1
+	if segmentNum <= 0 {
+		return fmt.Errorf("audioToSubtitle audioToSrt invalid split points: %v", timePoints)
+	}
 
 	type DataWithId[T any] struct {
 		Data T

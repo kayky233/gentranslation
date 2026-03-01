@@ -28,9 +28,10 @@ type ConfigRequest struct {
 		Port int    `json:"port"`
 	} `json:"server"`
 	Llm struct {
-		BaseUrl string `json:"baseUrl"`
-		ApiKey  string `json:"apiKey"`
-		Model   string `json:"model"`
+		Provider string `json:"provider"`
+		BaseUrl  string `json:"baseUrl"`
+		ApiKey   string `json:"apiKey"`
+		Model    string `json:"model"`
 	} `json:"llm"`
 	Transcribe struct {
 		Provider              string `json:"provider"`
@@ -115,13 +116,15 @@ func (h Handler) GetConfig(c *gin.Context) {
 			Port: config.Conf.Server.Port,
 		},
 		Llm: struct {
-			BaseUrl string `json:"baseUrl"`
-			ApiKey  string `json:"apiKey"`
-			Model   string `json:"model"`
+			Provider string `json:"provider"`
+			BaseUrl  string `json:"baseUrl"`
+			ApiKey   string `json:"apiKey"`
+			Model    string `json:"model"`
 		}{
-			BaseUrl: config.Conf.Llm.BaseUrl,
-			ApiKey:  config.Conf.Llm.ApiKey,
-			Model:   config.Conf.Llm.Model,
+			Provider: config.Conf.Llm.Provider,
+			BaseUrl:  config.Conf.Llm.BaseUrl,
+			ApiKey:   config.Conf.Llm.ApiKey,
+			Model:    config.Conf.Llm.Model,
 		},
 	}
 
@@ -195,6 +198,7 @@ func (h Handler) UpdateConfig(c *gin.Context) {
 	config.Conf.Server.Port = req.Server.Port
 
 	// 更新LLM配置
+	config.Conf.Llm.Provider = req.Llm.Provider
 	config.Conf.Llm.BaseUrl = req.Llm.BaseUrl
 	config.Conf.Llm.ApiKey = req.Llm.ApiKey
 	config.Conf.Llm.Model = req.Llm.Model

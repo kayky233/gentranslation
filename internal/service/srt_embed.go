@@ -245,8 +245,43 @@ func srtToAss(inputSRT, outputASS string, isHorizontal bool, stepParam *types.Su
 			_, _ = assFile.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,Major,,0,0,0,,%s\n", startFormatted, endFormatted, combinedText))
 		}
 	} else {
-		// TODO 竖屏拆分调优
+		// 竖屏：支持双语两行（第一行在上，第二行在下）
 		_, _ = assFile.WriteString(types.AssHeaderVertical)
+
+		writeVerticalLine := func(styleName string, content string, startTime time.Duration, endTime time.Duration) {
+			cleanedText := util.CleanPunction(content)
+			if cleanedText == "" {
+				return
+			}
+			totalTime := endTime - startTime
+
+			// 中文等非拉丁文字长句按字符切分，避免竖屏超出。
+			if !util.ContainsAlphabetic(cleanedText) && len([]rune(cleanedText)) > 10 {
+				segments := splitChineseText(cleanedText, 10)
+				for i, seg := range segments {
+					iStart := startTime + time.Duration(float64(i)*float64(totalTime)/float64(len(segments)))
+					iEnd := startTime + time.Duration(float64(i+1)*float64(totalTime)/float64(len(segments)))
+					if iEnd > endTime {
+						iEnd = endTime
+					}
+					startFormatted := formatTimestamp(iStart)
+					endFormatted := formatTimestamp(iEnd)
+					segmentText := util.CleanPunction(seg)
+					if segmentText == "" {
+						continue
+					}
+					combinedText := fmt.Sprintf("{\\an8}{\\r%s}%s", styleName, segmentText)
+					_, _ = assFile.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,%s,,0,0,0,,%s\n", startFormatted, endFormatted, styleName, combinedText))
+				}
+				return
+			}
+
+			startFormatted := formatTimestamp(startTime)
+			endFormatted := formatTimestamp(endTime)
+			combinedText := fmt.Sprintf("{\\an8}{\\r%s}%s", styleName, cleanedText)
+			_, _ = assFile.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,%s,,0,0,0,,%s\n", startFormatted, endFormatted, styleName, combinedText))
+		}
+
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" {
@@ -272,37 +307,33 @@ func srtToAss(inputSRT, outputASS string, isHorizontal bool, stepParam *types.Su
 				return err
 			}
 
-			var content string
-			scanner.Scan()
-			content = scanner.Text()
-			if content == "" {
+			var subtitleLines []string
+			for scanner.Scan() {
+				textLine := scanner.Text()
+				if textLine == "" {
+					break
+				}
+				subtitleLines = append(subtitleLines, textLine)
+			}
+			if len(subtitleLines) == 0 {
 				continue
 			}
-			totalTime := endTime - startTime
 
-			if !util.ContainsAlphabetic(content) {
-				// 处理中文字幕
-				chineseLines := splitChineseText(content, 10)
-				for i, line := range chineseLines {
-					iStart := startTime + time.Duration(float64(i)*float64(totalTime)/float64(len(chineseLines)))
-					iEnd := startTime + time.Duration(float64(i+1)*float64(totalTime)/float64(len(chineseLines)))
-					if iEnd > endTime {
-						iEnd = endTime
-					}
-
-					startFormatted := formatTimestamp(iStart)
-					endFormatted := formatTimestamp(iEnd)
-					cleanedText := util.CleanPunction(line)
-					combinedText := fmt.Sprintf("{\\an2}{\\rMajor}%s", cleanedText)
-					_, _ = assFile.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,Major,,0,0,0,,%s\n", startFormatted, endFormatted, combinedText))
+			if len(subtitleLines) >= 2 {
+				// 双语：第一行用 Major（上方），第二行及之后用 Minor（下方）。
+				writeVerticalLine("Major", subtitleLines[0], startTime, endTime)
+				for _, subLine := range subtitleLines[1:] {
+					writeVerticalLine("Minor", subLine, startTime, endTime)
 				}
+				continue
+			}
+
+			// 单语：按文字类型选择样式。
+			content := subtitleLines[0]
+			if util.ContainsAlphabetic(content) {
+				writeVerticalLine("Minor", content, startTime, endTime)
 			} else {
-				// 处理英文字幕
-				startFormatted := formatTimestamp(startTime)
-				endFormatted := formatTimestamp(endTime)
-				cleanedText := util.CleanPunction(content)
-				combinedText := fmt.Sprintf("{\\an2}{\\rMinor}%s", cleanedText)
-				_, _ = assFile.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,Minor,,0,0,0,,%s\n", startFormatted, endFormatted, combinedText))
+				writeVerticalLine("Major", content, startTime, endTime)
 			}
 		}
 	}
@@ -324,8 +355,19 @@ func embedSubtitles(stepParam *types.SubtitleTaskStepParam, isHorizontal bool, w
 	if withTts {
 		input = stepParam.VideoWithTtsFilePath
 	}
+	outputPath := filepath.Join(stepParam.TaskBasePath, fmt.Sprintf("/output/%s", outputFileName))
+	assFilter := fmt.Sprintf("ass=%s", strings.ReplaceAll(assPath, "\\", "/"))
 
-	cmd := exec.Command(storage.FfmpegPath, "-y", "-i", input, "-vf", fmt.Sprintf("ass=%s", strings.ReplaceAll(assPath, "\\", "/")), "-c:a", "aac", "-b:a", "192k", filepath.Join(stepParam.TaskBasePath, fmt.Sprintf("/output/%s", outputFileName)))
+	cmdArgs := []string{"-y", "-i", input}
+	// local_dual 输入的视频常常没有音轨，兜底将任务音频并回成片
+	if !withTts && stepParam.AudioFilePath != "" {
+		cmdArgs = append(cmdArgs, "-i", stepParam.AudioFilePath, "-map", "0:v:0", "-map", "1:a:0")
+	} else {
+		cmdArgs = append(cmdArgs, "-map", "0:v:0", "-map", "0:a:0?")
+	}
+	cmdArgs = append(cmdArgs, "-vf", assFilter, "-c:a", "aac", "-b:a", "192k", "-shortest", outputPath)
+
+	cmd := exec.Command(storage.FfmpegPath, cmdArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.GetLogger().Error("embedSubtitles embed subtitle into video ffmpeg error", zap.String("video path", stepParam.InputVideoPath), zap.String("output", string(output)), zap.Error(err))

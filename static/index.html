@@ -6,12 +6,12 @@
     <title>KrillinAI</title>
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css?family=Inter:400,600,700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
     />
     <style>
       body {
         margin: 0;
-        font-family: "Inter", Arial, sans-serif;
+        font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
         background: linear-gradient(120deg, #f8fafc 0%, #e0e7ef 100%);
         min-height: 100vh;
         color: #222;
@@ -578,6 +578,26 @@
       .guide-content code:hover {
         background: rgba(59, 130, 246, 0.15);
       }
+      .form-error {
+        color: #ef4444;
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .form-input.error,
+      .form-select.error {
+        border-color: #ef4444;
+        box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3);
+      }
+      .task-error {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #fca5a5;
+        background: #fef2f2;
+        color: #991b1b;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
     </style>
   </head>
   <body>
@@ -641,7 +661,11 @@
               </div>
 
               <div class="form-group hidden" id="fileInputContainer">
-                <label class="form-label">上传视频 Upload Video:</label>
+                <label class="form-label"
+                  >上传视频/音频 Upload Video or Audio:</label
+                >
+                <small class="form-hint" style="display: block; margin-bottom: 6px; color: #6b7280;"
+                  >支持单个文件，或同时上传视频+音频分开的两个文件</small>
                 <input
                   type="file"
                   id="fileInput"
@@ -852,7 +876,7 @@
                   disabled
                 >
                   <option value="horizontal">
-                    横屏输出 Landscape（16：9）
+                    横屏输出 Landscape（16:9）
                   </option>
                   <option value="vertical">竖屏输出 Portrait（9:16）</option>
                   <option value="all">横屏+竖屏 (Landscape+Portrait)</option>
@@ -890,10 +914,14 @@
             <!-- 进度区域 -->
             <div id="progressSection" class="progress-section hidden">
               <h4>任务进度 Task Progress</h4>
+        <div id="progressText" style="margin-bottom: 6px; font-size: 13px; color: #4b5563">
+          就绪 Ready
+        </div>
               <div class="progress-bar">
                 <div class="progress-fill" id="progressBar">0%</div>
               </div>
               <div id="downloadLinks" class="download-links hidden"></div>
+              <div id="taskError" class="task-error hidden"></div>
             </div>
           </div>
           <div id="llm-config" style="display: none">
@@ -941,6 +969,14 @@
                   <div class="provider-desc">高性价比AI模型</div>
                 </div>
 
+                <div class="provider-card" id="provider-local">
+                  <div class="provider-icon">
+                    <span style="font-size: 18px; line-height: 24px">💻</span>
+                  </div>
+                  <div class="provider-name">本地 LLM Local</div>
+                  <div class="provider-desc">本地 HTTP 兼容接口</div>
+                </div>
+
                 <div class="provider-card add" id="provider-add">
                   <div class="provider-icon">
                     <span style="font-size: 20px; line-height: 24px">＋</span>
@@ -954,6 +990,13 @@
             <!-- LLM 配置 -->
             <div class="card">
               <h3 class="card-title">LLM 配置 LLM Config</h3>
+              <div class="form-group">
+                <label class="form-label">模式 Mode:</label>
+                <select id="llm-provider" class="form-select">
+                  <option value="remote">云端 API（OpenAI / Qwen / DeepSeek 等）</option>
+                  <option value="local">本地 HTTP 服务 Local HTTP</option>
+                </select>
+              </div>
               <div class="form-group">
                 <label class="form-label">API Base URL:</label>
                 <input
@@ -987,6 +1030,7 @@
                   <option value="">请选择或手动输入</option>
                 </select>
               </div>
+              <div id="llm-config-error" class="form-error hidden"></div>
             </div>
 
             <!-- 使用指南 -->
@@ -1132,7 +1176,7 @@
               </div>
             </div>
 
-            <!-- 服务器配置 -->
+            <!-- 服务器配置区域 -->
             <div class="card">
               <h3 class="card-title">服务器配置 Server Config</h3>
               <div class="form-group">
@@ -1405,7 +1449,7 @@
               </div>
               <div class="form-group">
                 <label class="form-label"
-                  >阿里云 Aliyun Speech Access Key ID:</label
+                  >阿里云语音 Aliyun Speech Access Key ID:</label
                 >
                 <input
                   type="text"
@@ -1416,7 +1460,7 @@
               </div>
               <div class="form-group">
                 <label class="form-label"
-                  >阿里云 Aliyun Speech Access Key Secret:</label
+                  >阿里云语音 Aliyun Speech Access Key Secret:</label
                 >
                 <input
                   type="password"
@@ -1534,10 +1578,12 @@
       }
 
       // 供应商点击填充逻辑
-      function setProvider(baseUrl, models) {
+      function setProvider(baseUrl, models, providerId) {
         const baseInput = document.getElementById("llm-base-url");
         const modelInput = document.getElementById("llm-model");
         const suggest = document.getElementById("llm-model-suggest");
+        const providerSelect = document.getElementById("llm-provider");
+        const statusBar = document.getElementById("status-bar");
         if (baseInput) baseInput.value = baseUrl || "";
         if (suggest) {
           suggest.innerHTML = '<option value="">请选择或手动输入</option>';
@@ -1554,11 +1600,38 @@
             modelInput.value = "";
           }
         }
+        // 高亮选择的供应商卡片
+        document
+          .querySelectorAll(".provider-card")
+          .forEach((card) => card.classList.remove("active"));
+        if (providerId) {
+          const card = document.getElementById(providerId);
+          if (card) {
+            card.classList.add("active");
+          }
+        }
+        // 根据供应商自动切换到远程/本地模式
+        if (providerSelect && providerId) {
+          if (providerId === "provider-local") {
+            providerSelect.value = "local";
+          } else {
+            providerSelect.value = "remote";
+          }
+        }
+        // 状态栏提示
+        if (statusBar && providerId) {
+          statusBar.textContent =
+            "已选择 LLM 供应商: " +
+            providerId.replace("provider-", "") +
+            " - " +
+            getSimpleTime();
+        }
       }
 
       // 模型建议选择时同步到输入框
       document.addEventListener("DOMContentLoaded", () => {
         const suggest = document.getElementById("llm-model-suggest");
+        const providerSelect = document.getElementById("llm-provider");
         if (suggest) {
           suggest.addEventListener("change", () => {
             const modelInput = document.getElementById("llm-model");
@@ -1568,39 +1641,63 @@
           });
         }
 
+        if (providerSelect) {
+          providerSelect.addEventListener("change", () => {
+            const mode = providerSelect.value;
+            const baseInput = document.getElementById("llm-base-url");
+            const modelInput = document.getElementById("llm-model");
+            if (mode === "local") {
+              // 为本地 HTTP 服务提供一个默认示例，用户可自行修改
+              if (baseInput && !baseInput.value) {
+                baseInput.value = "http://127.0.0.1:11434/v1";
+              }
+              if (modelInput && !modelInput.value) {
+                modelInput.value = "qwen2.5:latest";
+              }
+            }
+          });
+        }
+
         // 供应商卡片点击绑定
         const qwen = document.getElementById("provider-qwen");
         const openai = document.getElementById("provider-openai");
         const deepseek = document.getElementById("provider-deepseek");
         const add = document.getElementById("provider-add");
+        const local = document.getElementById("provider-local");
         if (qwen) {
           qwen.onclick = () =>
-            setProvider("https://dashscope.aliyuncs.com/compatible-mode/v1", [
-              "qwen-turbo",
-              "qwen-plus",
-              "qwen-max",
-            ]);
+            setProvider(
+              "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              ["qwen-turbo", "qwen-plus", "qwen-max"],
+              "provider-qwen"
+            );
         }
         if (openai) {
           openai.onclick = () =>
-            setProvider("https://api.openai.com/v1", [
-              "gpt-4o-mini",
-              "gpt-4o",
-              "gpt-4.1-mini",
-              "o3-mini",
-            ]);
+            setProvider(
+              "https://api.openai.com/v1",
+              ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "o3-mini"],
+              "provider-openai"
+            );
         }
         if (deepseek) {
           deepseek.onclick = () =>
-            setProvider("https://api.deepseek.com/v1", [
-              "deepseek-chat",
-              "deepseek-coder",
-              "DeepSeek-V3",
-              "DeepSeek-R1",
-            ]);
+            setProvider(
+              "https://api.deepseek.com/v1",
+              ["deepseek-chat", "deepseek-coder", "DeepSeek-V3", "DeepSeek-R1"],
+              "provider-deepseek"
+            );
         }
         if (add) {
-          add.onclick = () => setProvider("", []);
+          add.onclick = () => setProvider("", [], "provider-add");
+        }
+        if (local) {
+          local.onclick = () =>
+            setProvider(
+              "http://127.0.0.1:11434/v1",
+              ["qwen2.5:latest", "llama3.1:latest"],
+              "provider-local"
+            );
         }
       });
 
@@ -1667,6 +1764,10 @@
           const suggest = document.getElementById("llm-model-suggest");
           if (suggest) {
             suggest.innerHTML = '<option value="">请选择或手动输入</option>';
+          }
+          const providerSelect = document.getElementById("llm-provider");
+          if (providerSelect && configData.llm.provider) {
+            providerSelect.value = configData.llm.provider;
           }
         }
 
@@ -1782,6 +1883,9 @@
               parseInt(document.getElementById("server-port").value) || 8888,
           },
           llm: {
+            provider: document.getElementById("llm-provider")
+              ? document.getElementById("llm-provider").value
+              : "remote",
             baseUrl: document.getElementById("llm-base-url").value,
             apiKey: document.getElementById("llm-api-key").value,
             model: document.getElementById("llm-model").value,
@@ -1789,7 +1893,7 @@
           transcribe: {
             provider: document.getElementById("transcribe-provider").value,
             enableGpuAcceleration:
-              document.getElementById("gpu-acceleration").value == true,
+              document.getElementById("gpu-acceleration").value === "true",
             openai: {
               baseUrl: document.getElementById("openai-base-url").value,
               apiKey: document.getElementById("openai-api-key").value,
@@ -1994,6 +2098,7 @@
       const progressSection = document.getElementById("progressSection");
       const progressBar = document.getElementById("progressBar");
       const downloadLinks = document.getElementById("downloadLinks");
+      const taskError = document.getElementById("taskError");
 
       // 获取表单元素
       const translationToggle = document.getElementById("bilingual-toggle");
@@ -2019,6 +2124,26 @@
 
       let uploadedVideoUrl = null;
       let uploadedAudioUrl = null;
+
+      function clearTaskError() {
+        if (!taskError) return;
+        taskError.textContent = "";
+        taskError.classList.add("hidden");
+      }
+
+      function showTaskError(reason, taskId = "") {
+        const normalizedReason = reason || "任务失败";
+        if (taskError) {
+          taskError.textContent = taskId
+            ? `任务失败（${taskId}）： ${normalizedReason}`
+            : `任务失败: ${normalizedReason}`;
+          taskError.classList.remove("hidden");
+        }
+        const statusBar = document.getElementById("status-bar");
+        if (statusBar) {
+          statusBar.textContent = `任务失败: ${normalizedReason} - ${getSimpleTime()}`;
+        }
+      }
 
       // 更新状态（启用或禁用表单项） Update state (enable or disable form items)
       function updateFormState() {
@@ -2221,6 +2346,7 @@
           }
           return (data.data || {}).task_id || "";
         } catch (error) {
+          showTaskError(error && error.message ? error.message : String(error));
           alert(error);
           console.error("启动任务失败:", error);
           return null;
@@ -2231,6 +2357,9 @@
       async function pollTaskProgress(taskId) {
         try {
           let progress = 0;
+          const statusBar = document.getElementById("status-bar");
+          const progressText =
+            document.getElementById("progressText") || null;
           while (progress < 100) {
             const response = await fetch(
               `${API_PROGRESS_URL}?taskId=${taskId}`
@@ -2239,7 +2368,9 @@
             console.log("progress response---:", data);
             if (+data.error !== 0 && +data.error !== 200) {
               if (executeButton) executeButton.disabled = false;
-              throw new Error(data.msg || "查询进度失败");
+              const reason = data.msg || "查询进度失败";
+              showTaskError(reason, taskId);
+              throw new Error(reason);
             }
             const responseData = data.data || {};
             progress = responseData.process_percent || 0;
@@ -2247,7 +2378,43 @@
               progressBar.style.width = progress + "%";
               progressBar.textContent = progress + "%";
             }
+            // 依据进度大致推断当前阶段，给出更友好的提示
+            if (statusBar) {
+              let phase = "";
+              if (progress < 10) {
+                phase = "正在准备任务 / 校验配置";
+              } else if (progress < 30) {
+                phase = "正在转写音频 Transcribing audio";
+              } else if (progress < 60) {
+                phase = "正在翻译字幕 Translating subtitles";
+              } else if (progress < 85) {
+                phase = "正在生成配音 / 合成音频 Generating dubbing";
+              } else if (progress < 100) {
+                phase = "正在合成视频 / 收尾中 Compositing video";
+              } else {
+                phase = "任务已完成 Task finished";
+              }
+              statusBar.textContent = `${phase} - ${progress}% - ${getSimpleTime()}`;
+            }
+            if (progressText) {
+              let label = "处理中 Processing";
+              if (progress < 10) {
+                label = "准备中 Initializing";
+              } else if (progress < 30) {
+                label = "转写中 Transcribing";
+              } else if (progress < 60) {
+                label = "翻译中 Translating";
+              } else if (progress < 85) {
+                label = "配音中 Dubbing";
+              } else if (progress < 100) {
+                label = "合成中 Compositing";
+              } else {
+                label = "已完成 Done";
+              }
+              progressText.textContent = `${label} · ${progress}%`;
+            }
             if (progress >= 100) {
+              clearTaskError();
               await displayDownloadLinks(
                 responseData.subtitle_info || [],
                 responseData.speech_download_url || "",
@@ -2275,6 +2442,7 @@
             await new Promise((resolve) => setTimeout(resolve, 5000));
           }
         } catch (error) {
+          showTaskError(error && error.message ? error.message : String(error), taskId);
           alert(error);
           if (executeButton) executeButton.disabled = false;
           console.error("查询进度失败:", error);
@@ -2330,7 +2498,18 @@
                   method: "HEAD",
                 }
               );
-              if (response.ok) {
+              const contentType = (
+                response.headers.get("content-type") || ""
+              ).toLowerCase();
+              const disposition = (
+                response.headers.get("content-disposition") || ""
+              ).toLowerCase();
+              const isAttachment = disposition.includes("attachment");
+              const isLikelyVideo =
+                contentType.includes("video/") ||
+                fileName.toLowerCase().endsWith(".mp4");
+
+              if (response.ok && isAttachment && isLikelyVideo) {
                 const link = document.createElement("a");
                 link.href = `/api/file/tasks/${taskId}/output/${fileName}`;
                 link.textContent = displayName;
@@ -2339,7 +2518,7 @@
               } else {
                 // 文件不存在，添加提示信息
                 const tip = document.createElement("div");
-                tip.textContent = `${displayName}： 生成的视频文件不存在，无法生成${videoType}视频`;
+                tip.textContent = `${displayName}: file not generated, cannot download ${videoType} video`;
                 tip.style.color = "#FF0000";
                 tip.style.fontSize = "12px";
                 tip.style.marginTop = "4px";
@@ -2347,10 +2526,9 @@
                 downloadLinks.appendChild(tip);
               }
             } catch (error) {
-              console.error(`检查${fileName}文件失败:`, error);
-              // 发生错误时也添加提示信息
+              console.error(`Failed to check ${fileName}:`, error);
               const tip = document.createElement("div");
-              tip.textContent = `${displayName}：文件检查失败`;
+              tip.textContent = `${displayName}: file check failed`;
               tip.style.color = "#FF0000";
               tip.style.fontSize = "12px";
               tip.style.marginTop = "4px";
@@ -2387,6 +2565,7 @@
         addButtonClickEffect(executeButton);
 
         executeButton.addEventListener("click", async () => {
+          clearTaskError();
           console.log("开始任务按钮被点击");
 
           // 更新状态栏
@@ -2424,10 +2603,19 @@
             }
           } else if (inputType.value === "file") {
             if (!uploadedVideoUrl) {
-              alert("请上传视频文件");
+              alert("请上传视频或音频文件");
               return;
             }
-            url = uploadedVideoUrl;
+            const paths = Array.isArray(uploadedVideoUrl)
+              ? uploadedVideoUrl
+              : [uploadedVideoUrl];
+            if (paths.length === 2) {
+              const p1 = String(paths[0]).replace(/^local:/, "");
+              const p2 = String(paths[1]).replace(/^local:/, "");
+              url = "local_dual:" + p1 + "|" + p2;
+            } else {
+              url = paths[0];
+            }
           }
 
           if (!url) {

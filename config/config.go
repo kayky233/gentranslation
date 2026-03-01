@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"go.uber.org/zap"
@@ -84,12 +85,19 @@ type OpenAiWhisper struct {
 	ApiKey  string `toml:"api_key"`
 }
 
+type LlmConfig struct {
+	Provider string `toml:"provider"`
+	BaseUrl  string `toml:"base_url"`
+	ApiKey   string `toml:"api_key"`
+	Model    string `toml:"model"`
+}
+
 type Config struct {
-	App        App                    `toml:"app"`
-	Server     Server                 `toml:"server"`
-	Llm        OpenaiCompatibleConfig `toml:"llm"`
-	Transcribe Transcribe             `toml:"transcribe"`
-	Tts        Tts                    `toml:"tts"`
+	App        App        `toml:"app"`
+	Server     Server     `toml:"server"`
+	Llm        LlmConfig  `toml:"llm"`
+	Transcribe Transcribe `toml:"transcribe"`
+	Tts        Tts        `toml:"tts"`
 }
 
 var Conf = Config{
@@ -105,8 +113,9 @@ var Conf = Config{
 		Host: "127.0.0.1",
 		Port: 8888,
 	},
-	Llm: OpenaiCompatibleConfig{
-		Model: "gpt-4o-mini",
+	Llm: LlmConfig{
+		Provider: "remote",
+		Model:    "gpt-4o-mini",
 	},
 	Transcribe: Transcribe{
 		Provider:              "openai",
@@ -168,7 +177,56 @@ func validateConfig() error {
 		return errors.New("不支持的转录提供商")
 	}
 
+	llmBaseURL := strings.ToLower(strings.TrimSpace(Conf.Llm.BaseUrl))
+	llmModel := strings.ToLower(strings.TrimSpace(Conf.Llm.Model))
+	if strings.Contains(llmBaseURL, "api.deepseek.com") {
+		if llmModel == "" {
+			return errors.New("检测到 DeepSeek Base URL，但 llm.model 为空，请设置为 deepseek-chat")
+		}
+		if strings.HasPrefix(llmModel, "gpt-") {
+			return fmt.Errorf("当前 LLM 配置不匹配：Base URL 为 DeepSeek，但模型为 %s，请改为 deepseek-chat", Conf.Llm.Model)
+		}
+	}
+
 	return nil
+}
+
+// ApplyEnvOverrides 从环境变量补充未填写的 API Key 等配置（配置文件为空时生效）
+func ApplyEnvOverrides() {
+	// LLM：支持 DEEPSEEK_API_KEY、OPENAI_API_KEY、LLM_API_KEY
+	if Conf.Llm.ApiKey == "" {
+		if v := os.Getenv("DEEPSEEK_API_KEY"); v != "" {
+			Conf.Llm.ApiKey = v
+			if Conf.Llm.BaseUrl == "" {
+				Conf.Llm.BaseUrl = "https://api.deepseek.com/v1"
+			}
+			modelLower := strings.ToLower(strings.TrimSpace(Conf.Llm.Model))
+			if modelLower == "" || modelLower == "gpt-3.5-turbo" || modelLower == "gpt-4o-mini" {
+				Conf.Llm.Model = "deepseek-chat"
+				log.GetLogger().Warn("检测到DEEPSEEK_API_KEY，LLM模型自动调整为 deepseek-chat", zap.String("previous_model", modelLower))
+			}
+			log.GetLogger().Info("LLM 已从环境变量 DEEPSEEK_API_KEY 加载")
+		} else if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+			Conf.Llm.ApiKey = v
+			if Conf.Llm.BaseUrl == "" {
+				Conf.Llm.BaseUrl = "https://api.openai.com/v1"
+			}
+			if Conf.Llm.Model == "" {
+				Conf.Llm.Model = "gpt-4o-mini"
+			}
+			log.GetLogger().Info("LLM 已从环境变量 OPENAI_API_KEY 加载")
+		} else if v := os.Getenv("LLM_API_KEY"); v != "" {
+			Conf.Llm.ApiKey = v
+			log.GetLogger().Info("LLM 已从环境变量 LLM_API_KEY 加载")
+		}
+	}
+	// 转录 OpenAI：支持 OPENAI_API_KEY
+	if Conf.Transcribe.Provider == "openai" && Conf.Transcribe.Openai.ApiKey == "" {
+		if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+			Conf.Transcribe.Openai.ApiKey = v
+			log.GetLogger().Info("转录 OpenAI 已从环境变量 OPENAI_API_KEY 加载")
+		}
+	}
 }
 
 func LoadConfig() bool {
@@ -183,6 +241,7 @@ func LoadConfig() bool {
 			log.GetLogger().Error("加载配置文件失败", zap.Error(err))
 			return false
 		}
+		ApplyEnvOverrides()
 		return true
 	}
 }

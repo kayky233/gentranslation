@@ -136,7 +136,7 @@ func GetSplitPoints(input string, segmentDuration float64) ([]float64, error) {
 		return nil, fmt.Errorf("failed to get quietest time points: %w", err)
 	}
 	// 如果最后一个片段短于最小分割时长，则将其合并到前一个片段
-	if audioDuration-timePoints[segmentNum-1] < MIN_DURATION {
+	if segmentNum > 1 && audioDuration-timePoints[segmentNum-1] < MIN_DURATION {
 		timePoints = timePoints[:segmentNum]
 	}
 	timePoints[len(timePoints)-1] = audioDuration

@@ -4,11 +4,21 @@ import (
 	"krillin-ai/internal/handler"
 	"krillin-ai/static"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
 func SetupRouter(r *gin.Engine) {
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/static") {
+			c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+		}
+		c.Next()
+	})
+
 	api := r.Group("/api")
 
 	hdl := handler.NewHandler()

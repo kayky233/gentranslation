@@ -37,6 +37,10 @@ func (c *Client) ChatCompletion(query string) (string, error) {
 
 	stream, err := c.client.CreateChatCompletionStream(context.Background(), req)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "model not exist") {
+			err = fmt.Errorf("当前LLM模型不可用，请检查模型名与Base URL是否匹配（model=%s, base_url=%s）: %w",
+				config.Conf.Llm.Model, config.Conf.Llm.BaseUrl, err)
+		}
 		log.GetLogger().Error("openai create chat completion stream failed", zap.Error(err))
 		return "", err
 	}
