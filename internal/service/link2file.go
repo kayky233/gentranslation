@@ -17,6 +17,11 @@ import (
 	"go.uber.org/zap"
 )
 
+func isYouTubeLink(link string) bool {
+	l := strings.ToLower(strings.TrimSpace(link))
+	return strings.Contains(l, "youtube.com") || strings.Contains(l, "youtu.be")
+}
+
 // isVideoExt 根据扩展名判断是否为视频文件
 func isVideoExt(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
@@ -40,6 +45,37 @@ func bilibiliAnti412Args() []string {
 func isBilibili412(output []byte) bool {
 	out := string(output)
 	return strings.Contains(out, "412") || strings.Contains(out, "Precondition Failed")
+}
+
+func tailOutput(output []byte, maxLen int) string {
+	detail := strings.TrimSpace(string(output))
+	if len(detail) <= maxLen {
+		return detail
+	}
+	return "... " + detail[len(detail)-maxLen:]
+}
+
+func shouldRetryYouTubeAfterUpdate(output []byte) bool {
+	out := strings.ToLower(string(output))
+	return strings.Contains(out, "nsig extraction failed") ||
+		strings.Contains(out, "precondition check failed") ||
+		strings.Contains(out, "unable to extract") ||
+		strings.Contains(out, "http error 400") ||
+		strings.Contains(out, "sign in to confirm")
+}
+
+func youtubeDownloadHint(output []byte, cookiesPath string) string {
+	out := strings.ToLower(string(output))
+	if strings.Contains(out, "sign in to confirm") || strings.Contains(out, "not a bot") {
+		if _, statErr := os.Stat(cookiesPath); statErr == nil {
+			return "YouTube 触发登录校验，当前 cookies 可能已失效。请重新导出 YouTube cookies.txt 后重试。"
+		}
+		return "YouTube 触发登录校验，请上传有效的 YouTube cookies.txt 后重试。"
+	}
+	if strings.Contains(out, "nsig extraction failed") || strings.Contains(out, "precondition check failed") {
+		return "yt-dlp 版本可能过旧或接口策略变化，建议升级后重试。"
+	}
+	return "可尝试：1) 重试任务 2) 上传 YouTube cookies.txt 3) 检查代理网络。"
 }
 
 func resolveCookiesPath(stepParam *types.SubtitleTaskStepParam) string {
@@ -156,7 +192,7 @@ func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskSt
 		} else {
 			stepParam.InputVideoPath = ""
 		}
-	} else if strings.Contains(link, "youtube.com") {
+	} else if isYouTubeLink(link) {
 		var videoId string
 		videoId, err = util.GetYouTubeID(link)
 		if err != nil {
@@ -184,9 +220,28 @@ func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskSt
 		}
 		cmd := exec.Command(storage.YtdlpPath, cmdArgs...)
 		output, err = cmd.CombinedOutput()
+		if err != nil && shouldRetryYouTubeAfterUpdate(output) {
+			updateCmd := exec.Command(storage.YtdlpPath, "-U")
+			updateOutput, updateErr := updateCmd.CombinedOutput()
+			if updateErr != nil {
+				log.GetLogger().Warn("linkToFile yt-dlp self-update failed", zap.String("updateOutput", string(updateOutput)), zap.Error(updateErr))
+			} else {
+				log.GetLogger().Info("linkToFile yt-dlp self-update succeeded", zap.String("updateOutput", string(updateOutput)))
+			}
+			cmd = exec.Command(storage.YtdlpPath, cmdArgs...)
+			retryOutput, retryErr := cmd.CombinedOutput()
+			if retryErr == nil {
+				output = retryOutput
+				err = nil
+			} else {
+				output = append(output, []byte("\n[retry after -U]\n"+string(retryOutput))...)
+				err = retryErr
+			}
+		}
 		if err != nil {
 			log.GetLogger().Error("linkToFile download audio yt-dlp error", zap.Any("step param", stepParam), zap.String("output", string(output)), zap.Error(err))
-			return fmt.Errorf("linkToFile download audio yt-dlp error: %w", err)
+			hint := youtubeDownloadHint(output, cookiesPath)
+			return fmt.Errorf("YouTube 下载音频失败。%s 详情: %s", hint, tailOutput(output, 600))
 		}
 	} else if strings.Contains(link, "bilibili.com") {
 		videoId := util.GetBilibiliVideoId(link)

@@ -19,7 +19,7 @@ import (
 
 func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.StartVideoSubtitleTaskResData, error) {
 	// 校验链接
-	if strings.Contains(req.Url, "youtube.com") {
+	if isYouTubeLink(req.Url) {
 		videoId, _ := util.GetYouTubeID(req.Url)
 		if videoId == "" {
 			return nil, fmt.Errorf("链接不合法")
