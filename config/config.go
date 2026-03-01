@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -225,6 +226,31 @@ func ApplyEnvOverrides() {
 		if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 			Conf.Transcribe.Openai.ApiKey = v
 			log.GetLogger().Info("转录 OpenAI 已从环境变量 OPENAI_API_KEY 加载")
+		}
+	}
+
+	// Server host/port overrides for PaaS platforms.
+	if v := strings.TrimSpace(os.Getenv("SERVER_HOST")); v != "" {
+		Conf.Server.Host = v
+		log.GetLogger().Info("Server host override from SERVER_HOST", zap.String("host", v))
+	} else if v := strings.TrimSpace(os.Getenv("HOST")); v != "" {
+		Conf.Server.Host = v
+		log.GetLogger().Info("Server host override from HOST", zap.String("host", v))
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SERVER_PORT")); v != "" {
+		if port, err := strconv.Atoi(v); err == nil && port > 0 && port <= 65535 {
+			Conf.Server.Port = port
+			log.GetLogger().Info("Server port override from SERVER_PORT", zap.Int("port", port))
+		} else {
+			log.GetLogger().Warn("Invalid SERVER_PORT, ignore", zap.String("value", v))
+		}
+	} else if v := strings.TrimSpace(os.Getenv("PORT")); v != "" {
+		if port, err := strconv.Atoi(v); err == nil && port > 0 && port <= 65535 {
+			Conf.Server.Port = port
+			log.GetLogger().Info("Server port override from PORT", zap.Int("port", port))
+		} else {
+			log.GetLogger().Warn("Invalid PORT, ignore", zap.String("value", v))
 		}
 	}
 }
