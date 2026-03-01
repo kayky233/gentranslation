@@ -1,3 +1,13 @@
+FROM golang:1.22-bookworm AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/KrillinAI ./cmd/server
+
 FROM ubuntu:latest
 
 WORKDIR /app
@@ -13,11 +23,11 @@ RUN mkdir -p bin && \
     YT_DLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2025.01.15/yt-dlp_linux"; \
     EDGE_TTS_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-amd64"; \
     ;; \
-    armv7l) \
-    YT_DLP_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-armv7"; \
+    armv7l|armv7) \
+    YT_DLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2025.01.15/yt-dlp_linux_armv7l"; \
     EDGE_TTS_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-armv7"; \
     ;; \
-    aarch64) \
+    aarch64|arm64) \
     YT_DLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2025.01.15/yt-dlp_linux_aarch64"; \
     EDGE_TTS_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-arm64"; \
     ;; \
@@ -29,12 +39,14 @@ RUN mkdir -p bin && \
     wget -O bin/edge-tts "$EDGE_TTS_URL" && \
     chmod +x bin/yt-dlp bin/edge-tts
 
-COPY KrillinAI ./
+COPY --from=builder /out/KrillinAI ./KrillinAI
+COPY config/config-example.toml ./config/config.toml
 
-RUN mkdir -p /app/models && \
+RUN sed -i 's/host = "127.0.0.1"/host = "0.0.0.0"/' ./config/config.toml && \
+    mkdir -p /app/models /app/tasks /app/uploads && \
     chmod +x ./KrillinAI
 
-VOLUME ["/app/bin", "/app/models"]
+VOLUME ["/app/bin", "/app/models", "/app/tasks"]
 
 ENV PATH="/app/bin:${PATH}"
 

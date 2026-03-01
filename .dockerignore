@@ -1,0 +1,16 @@
+.git
+.github
+.idea
+.vscode
+build
+dist
+app.log
+*.exe
+*.bat
+videoplayback*.mp4
+tasks
+uploads
+models
+bin
+cookies.txt
+config/config.toml
