@@ -3,6 +3,7 @@ package dto
 type StartVideoSubtitleTaskReq struct {
 	AppId                     uint32   `json:"app_id"`
 	Url                       string   `json:"url"`
+	CookiesFileUrl            string   `json:"cookies_file_url"`
 	OriginLanguage            string   `json:"origin_lang"`
 	TargetLang                string   `json:"target_lang"`
 	Bilingual                 uint8    `json:"bilingual"`

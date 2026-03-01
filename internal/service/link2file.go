@@ -29,11 +29,93 @@ func isAudioExt(path string) bool {
 	return ext == ".mp3" || ext == ".wav" || ext == ".m4a" || ext == ".aac" || ext == ".flac" || ext == ".ogg"
 }
 
+func bilibiliAnti412Args() []string {
+	return []string{
+		"--add-header", "Referer: https://www.bilibili.com/",
+		"--add-header", "Origin: https://www.bilibili.com",
+		"--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+	}
+}
+
+func isBilibili412(output []byte) bool {
+	out := string(output)
+	return strings.Contains(out, "412") || strings.Contains(out, "Precondition Failed")
+}
+
+func resolveCookiesPath(stepParam *types.SubtitleTaskStepParam) string {
+	if stepParam != nil && strings.TrimSpace(stepParam.CookiesFilePath) != "" {
+		return strings.TrimSpace(stepParam.CookiesFilePath)
+	}
+	return "./cookies.txt"
+}
+
+func hasBilibiliSessdataCookie(cookiesPath string) bool {
+	data, err := os.ReadFile(cookiesPath)
+	if err != nil {
+		return false
+	}
+	content := string(data)
+	return strings.Contains(content, "bilibili.com") && strings.Contains(content, "SESSDATA")
+}
+
+func bilibiliDownloadHint(output []byte, cookiesPath string) string {
+	out := string(output)
+	if strings.Contains(out, "Failed to decrypt with DPAPI") ||
+		strings.Contains(out, "Could not copy Chrome cookie database") ||
+		strings.Contains(out, "no such table: moz_cookies") {
+		return "自动读取浏览器 Cookie 失败（浏览器可能占用或系统加密限制）。请关闭浏览器后重试，或手动导出 cookies.txt（可在网页上传，仅当前任务使用）"
+	}
+	if isBilibili412(output) {
+		if _, statErr := os.Stat(cookiesPath); statErr == nil && !hasBilibiliSessdataCookie(cookiesPath) {
+			return "检测到 cookies.txt 但缺少 B 站登录态（SESSDATA）。请先在浏览器登录 B站，再重新导出 cookies.txt（可在网页上传，仅当前任务使用）"
+		}
+		return "B站返回 412，通常需要登录 Cookie。已自动尝试读取浏览器 Cookie；若仍失败，请重新导出 cookies.txt（可在网页上传，仅当前任务使用）"
+	}
+	return "可尝试: 1) 更新 yt-dlp（.\\bin\\yt-dlp.exe -U） 2) 检查链接是否有效"
+}
+
+func runYtDlpWithBilibiliFallback(baseArgs []string, url string, cookiesPath string) ([]byte, error) {
+	args := append([]string{}, baseArgs...)
+	if _, statErr := os.Stat(cookiesPath); statErr == nil {
+		args = append(args, "--cookies", cookiesPath)
+	}
+	args = append(args, url)
+
+	cmd := exec.Command(storage.YtdlpPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err == nil || !isBilibili412(output) {
+		return output, err
+	}
+
+	// 412 时尝试直接读取本机浏览器 Cookie（依次 edge/chrome/firefox）
+	combinedOutput := string(output)
+	for _, browser := range []string{"edge", "chrome", "firefox"} {
+		retryArgs := append([]string{}, baseArgs...)
+		retryArgs = append(retryArgs, "--cookies-from-browser", browser, url)
+		retryCmd := exec.Command(storage.YtdlpPath, retryArgs...)
+		retryOutput, retryErr := retryCmd.CombinedOutput()
+		if retryErr == nil {
+			return retryOutput, nil
+		}
+		if len(retryOutput) > 0 {
+			combinedOutput += "\n[retry " + browser + "] " + string(retryOutput)
+		}
+		err = retryErr
+		output = retryOutput
+	}
+
+	if combinedOutput != "" {
+		return []byte(combinedOutput), err
+	}
+	return output, err
+}
+
 func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskStepParam) error {
 	var (
 		err    error
 		output []byte
 	)
+	cookiesPath := resolveCookiesPath(stepParam)
 	link := stepParam.Link
 	audioPath := fmt.Sprintf("%s/%s", stepParam.TaskBasePath, types.SubtitleTaskAudioFileName)
 	videoPath := fmt.Sprintf("%s/%s", stepParam.TaskBasePath, types.SubtitleTaskVideoFileName)
@@ -94,8 +176,8 @@ func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskSt
 		if config.Conf.App.Proxy != "" {
 			cmdArgs = append(cmdArgs, "--proxy", config.Conf.App.Proxy)
 		}
-		if _, err := os.Stat("./cookies.txt"); err == nil {
-			cmdArgs = append(cmdArgs, "--cookies", "./cookies.txt")
+		if _, err := os.Stat(cookiesPath); err == nil {
+			cmdArgs = append(cmdArgs, "--cookies", cookiesPath)
 		}
 		if storage.FfmpegPath != "ffmpeg" {
 			cmdArgs = append(cmdArgs, "--ffmpeg-location", storage.FfmpegPath)
@@ -120,29 +202,22 @@ func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskSt
 			"--audio-quality", "192K",
 			"-o", audioPath,
 			"--no-warnings",
-			stepParam.Link,
 		}
 		if config.Conf.App.Proxy != "" {
 			cmdArgs = append(cmdArgs, "--proxy", config.Conf.App.Proxy)
 		}
-		if _, statErr := os.Stat("./cookies.txt"); statErr == nil {
-			cmdArgs = append(cmdArgs, "--cookies", "./cookies.txt")
-		}
+		cmdArgs = append(cmdArgs, bilibiliAnti412Args()...)
 		if storage.FfmpegPath != "ffmpeg" {
 			cmdArgs = append(cmdArgs, "--ffmpeg-location", storage.FfmpegPath)
 		}
-		cmd := exec.Command(storage.YtdlpPath, cmdArgs...)
-		output, err = cmd.CombinedOutput()
+		output, err = runYtDlpWithBilibiliFallback(cmdArgs, stepParam.Link, cookiesPath)
 		if err != nil {
 			log.GetLogger().Error("linkToFile download audio yt-dlp error", zap.Any("step param", stepParam), zap.String("output", string(output)), zap.Error(err))
 			errDetail := strings.TrimSpace(string(output))
 			if len(errDetail) > 300 {
 				errDetail = "... " + errDetail[len(errDetail)-300:]
 			}
-			hint := "可尝试: 1) 更新 yt-dlp（.\\bin\\yt-dlp.exe -U） 2) 检查链接是否有效"
-			if strings.Contains(string(output), "412") || strings.Contains(string(output), "Precondition Failed") {
-				hint = "B站返回 412，通常需要登录 Cookie。请将 cookies.txt 放到项目根目录，详见 docs/zh/faq.md"
-			}
+			hint := bilibiliDownloadHint(output, cookiesPath)
 			return fmt.Errorf("B站下载失败。%s 详情: %s", hint, errDetail)
 		}
 	} else {
@@ -155,17 +230,34 @@ func (s Service) linkToFile(ctx context.Context, stepParam *types.SubtitleTaskSt
 	needDownloadVideo := !strings.HasPrefix(link, "local:") && !strings.HasPrefix(link, "local_dual:") && stepParam.EmbedSubtitleVideoType != "none"
 	if needDownloadVideo {
 		// 需要下载原视频
-		cmdArgs := []string{"-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]", "-o", videoPath, stepParam.Link}
+		cmdArgs := []string{"-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]", "-o", videoPath}
 		if config.Conf.App.Proxy != "" {
 			cmdArgs = append(cmdArgs, "--proxy", config.Conf.App.Proxy)
+		}
+		if strings.Contains(stepParam.Link, "bilibili.com") {
+			cmdArgs = append(cmdArgs, bilibiliAnti412Args()...)
 		}
 		if storage.FfmpegPath != "ffmpeg" {
 			cmdArgs = append(cmdArgs, "--ffmpeg-location", storage.FfmpegPath)
 		}
-		cmd := exec.Command(storage.YtdlpPath, cmdArgs...)
-		output, err = cmd.CombinedOutput()
+		if strings.Contains(stepParam.Link, "bilibili.com") {
+			output, err = runYtDlpWithBilibiliFallback(cmdArgs, stepParam.Link, cookiesPath)
+		} else {
+			args := append([]string{}, cmdArgs...)
+			args = append(args, stepParam.Link)
+			cmd := exec.Command(storage.YtdlpPath, args...)
+			output, err = cmd.CombinedOutput()
+		}
 		if err != nil {
 			log.GetLogger().Error("linkToFile download video yt-dlp error", zap.Any("step param", stepParam), zap.String("output", string(output)), zap.Error(err))
+			if strings.Contains(stepParam.Link, "bilibili.com") {
+				errDetail := strings.TrimSpace(string(output))
+				if len(errDetail) > 300 {
+					errDetail = "... " + errDetail[len(errDetail)-300:]
+				}
+				hint := bilibiliDownloadHint(output, cookiesPath)
+				return fmt.Errorf("B站视频下载失败。%s 详情: %s", hint, errDetail)
+			}
 			return fmt.Errorf("linkToFile download video yt-dlp error: %w", err)
 		}
 		stepParam.InputVideoPath = videoPath

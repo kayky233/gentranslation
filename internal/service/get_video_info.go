@@ -8,6 +8,7 @@ import (
 	"krillin-ai/internal/storage"
 	"krillin-ai/internal/types"
 	"krillin-ai/log"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -22,8 +23,11 @@ func (s Service) getVideoInfo(ctx context.Context, stepParam *types.SubtitleTask
 		// 获取标题
 		titleCmdArgs := []string{"--skip-download", "--encoding", "utf-8", "--get-title", stepParam.Link}
 		descriptionCmdArgs := []string{"--skip-download", "--encoding", "utf-8", "--get-description", stepParam.Link}
-		titleCmdArgs = append(titleCmdArgs, "--cookies", "./cookies.txt")
-		descriptionCmdArgs = append(descriptionCmdArgs, "--cookies", "./cookies.txt")
+		cookiesPath := resolveCookiesPath(stepParam)
+		if _, statErr := os.Stat(cookiesPath); statErr == nil {
+			titleCmdArgs = append(titleCmdArgs, "--cookies", cookiesPath)
+			descriptionCmdArgs = append(descriptionCmdArgs, "--cookies", cookiesPath)
+		}
 		if config.Conf.App.Proxy != "" {
 			titleCmdArgs = append(titleCmdArgs, "--proxy", config.Conf.App.Proxy)
 			descriptionCmdArgs = append(descriptionCmdArgs, "--proxy", config.Conf.App.Proxy)

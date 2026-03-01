@@ -322,6 +322,7 @@ type SubtitleTaskStepParam struct {
 	TaskPtr                     *SubtitleTask // 和storage里面对应
 	TaskBasePath                string
 	Link                        string
+	CookiesFilePath             string
 	AudioFilePath               string
 	SubtitleResultType          SubtitleResultType
 	EnableModalFilter           bool

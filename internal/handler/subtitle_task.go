@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"fmt"
+	"krillin-ai/internal/deps"
 	"krillin-ai/internal/dto"
 	"krillin-ai/internal/response"
 	"krillin-ai/internal/service"
-	"krillin-ai/internal/deps"
 	"krillin-ai/log"
+	"krillin-ai/pkg/util"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -108,13 +111,25 @@ func (h Handler) UploadFile(c *gin.Context) {
 	}
 
 	// 保存每个文件
+	if err := os.MkdirAll("./uploads", os.ModePerm); err != nil {
+		response.R(c, response.Response{
+			Error: -1,
+			Msg:   "创建上传目录失败",
+			Data:  nil,
+		})
+		return
+	}
+
 	var savedFiles []string
 	for _, file := range files {
-		savePath := "./uploads/" + file.Filename
+		ext := strings.ToLower(filepath.Ext(file.Filename))
+		base := util.SanitizePathName(strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename)))
+		uniqueName := fmt.Sprintf("%s_%s%s", base, util.GenerateRandStringWithUpperLowerNum(8), ext)
+		savePath := "./uploads/" + uniqueName
 		if err := c.SaveUploadedFile(file, savePath); err != nil {
 			response.R(c, response.Response{
 				Error: -1,
-				Msg:   "文件保存失败: " + file.Filename,
+				Msg:   "文件保存失败: " + uniqueName,
 				Data:  nil,
 			})
 			return

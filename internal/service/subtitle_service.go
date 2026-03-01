@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/samber/lo"
+	"go.uber.org/zap"
 	"krillin-ai/internal/dto"
 	"krillin-ai/internal/storage"
 	"krillin-ai/internal/types"
@@ -13,8 +15,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"github.com/samber/lo"
-	"go.uber.org/zap"
 )
 
 func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.StartVideoSubtitleTaskResData, error) {
@@ -98,11 +98,29 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 		log.GetLogger().Info("StartVideoSubtitleTask 上传声音克隆源成功", zap.Any("oss url", voiceCloneAudioUrl))
 	}
 
+	// 处理任务级 cookies 文件（仅当前任务使用）
+	var cookiesFilePath string
+	if req.CookiesFileUrl != "" {
+		localCookiesPath := strings.TrimPrefix(req.CookiesFileUrl, "local:")
+		if localCookiesPath == req.CookiesFileUrl {
+			return nil, errors.New("cookies 文件参数不合法")
+		}
+		if _, statErr := os.Stat(localCookiesPath); statErr != nil {
+			return nil, errors.New("cookies 文件不存在或不可读")
+		}
+		cookiesFilePath = filepath.Join(taskBasePath, "cookies.txt")
+		if err = util.CopyFile(localCookiesPath, cookiesFilePath); err != nil {
+			log.GetLogger().Error("StartVideoSubtitleTask copy cookies file err", zap.Any("req", req), zap.Error(err))
+			return nil, errors.New("复制 cookies 文件失败")
+		}
+	}
+
 	stepParam := types.SubtitleTaskStepParam{
 		TaskId:                  taskId,
 		TaskPtr:                 taskPtr,
 		TaskBasePath:            taskBasePath,
 		Link:                    req.Url,
+		CookiesFilePath:         cookiesFilePath,
 		SubtitleResultType:      resultType,
 		EnableModalFilter:       req.ModalFilter == types.SubtitleTaskModalFilterYes,
 		EnableTts:               req.Tts == types.SubtitleTaskTtsYes,

@@ -677,6 +677,24 @@
                   正在上传... Uploading...
                 </div>
               </div>
+
+              <div class="form-group">
+                <label class="form-label"
+                  >B站 Cookie（可选）<br />Bilibili Cookie (Optional):</label
+                >
+                <input
+                  type="file"
+                  id="cookieFileInput"
+                  accept=".txt,text/plain"
+                  class="form-input"
+                  style="width: 320px"
+                />
+                <small
+                  class="form-hint"
+                  style="display: block; margin-top: 6px; color: #6b7280"
+                  >多人使用时请各自上传 cookies.txt，仅用于当前任务，不会覆盖服务器根目录。</small
+                >
+              </div>
             </div>
 
             <!-- 字幕设置区域 -->
@@ -2094,6 +2112,7 @@
       const fileInput = document.getElementById("fileInput");
       const uploadStatus = document.getElementById("uploadStatus");
       const voiceFileInput = document.getElementById("voiceFileInput");
+      const cookieFileInput = document.getElementById("cookieFileInput");
       const executeButton = document.getElementById("executeButton");
       const progressSection = document.getElementById("progressSection");
       const progressBar = document.getElementById("progressBar");
@@ -2124,6 +2143,7 @@
 
       let uploadedVideoUrl = null;
       let uploadedAudioUrl = null;
+      let uploadedCookiesUrl = null;
 
       function clearTaskError() {
         if (!taskError) return;
@@ -2202,6 +2222,12 @@
               ? uploadedAudioUrl[0]
               : uploadedAudioUrl;
           }
+        }
+
+        if (uploadedCookiesUrl) {
+          formData.cookies_file_url = Array.isArray(uploadedCookiesUrl)
+            ? uploadedCookiesUrl[0]
+            : uploadedCookiesUrl;
         }
 
         if (formData.target_lang === "ro2") {
@@ -2325,6 +2351,40 @@
             );
           } catch (error) {
             console.error("音频上传失败 Audio upload failed:", error);
+            alert(error);
+          }
+        });
+      }
+
+      // 处理 cookies 上传
+      if (cookieFileInput) {
+        cookieFileInput.addEventListener("change", async () => {
+          if (cookieFileInput.files.length === 0) {
+            uploadedCookiesUrl = null;
+            return;
+          }
+
+          const file = cookieFileInput.files[0];
+          const formData = new FormData();
+          formData.append("file", file);
+
+          try {
+            const response = await fetch(API_UPLOAD_URL, {
+              method: "POST",
+              body: formData,
+            });
+            if (!response.ok) throw new Error("cookies 上传失败");
+            const res = await response.json();
+            const { error, data, msg } = res || {};
+            if (error !== 0 && error !== 200) {
+              throw new Error(
+                msg || "cookies 上传失败，请重试 Upload failed, please try again"
+              );
+            }
+            uploadedCookiesUrl = data.file_path;
+            console.log("cookies 上传成功:", uploadedCookiesUrl);
+          } catch (error) {
+            console.error("cookies 上传失败:", error);
             alert(error);
           }
         });
