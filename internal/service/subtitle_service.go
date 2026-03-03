@@ -4,6 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"krillin-ai/internal/dto"
@@ -11,34 +16,45 @@ import (
 	"krillin-ai/internal/types"
 	"krillin-ai/log"
 	"krillin-ai/pkg/util"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 )
 
 func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.StartVideoSubtitleTaskResData, error) {
-	// 校验链接
 	if isYouTubeLink(req.Url) {
-		videoId, _ := util.GetYouTubeID(req.Url)
-		if videoId == "" {
+		videoID, _ := util.GetYouTubeID(req.Url)
+		if videoID == "" {
 			return nil, fmt.Errorf("链接不合法")
 		}
 	}
-	if strings.Contains(req.Url, "bilibili.com") {
-		videoId := util.GetBilibiliVideoId(req.Url)
-		if videoId == "" {
+	if isBilibiliLink(req.Url) {
+		videoID := util.GetBilibiliVideoId(req.Url)
+		if videoID == "" {
 			return nil, fmt.Errorf("链接不合法")
 		}
 	}
-	// 生成任务id
-	seperates := strings.Split(req.Url, "/")
-	taskId := fmt.Sprintf("%s_%s", util.SanitizePathName(string([]rune(strings.ReplaceAll(seperates[len(seperates)-1], " ", ""))[:16])), util.GenerateRandStringWithUpperLowerNum(4))
-	taskId = strings.ReplaceAll(taskId, "=", "") // 等于号影响ffmpeg处理
-	taskId = strings.ReplaceAll(taskId, "?", "") // 问号影响ffmpeg处理
-	// 构造任务所需参数
+	if isTwitterLink(req.Url) {
+		statusID := util.GetTwitterStatusID(req.Url)
+		if statusID == "" {
+			return nil, fmt.Errorf("链接不合法")
+		}
+	}
+
+	separates := strings.Split(req.Url, "/")
+	taskIDSeed := "task"
+	if len(separates) > 0 {
+		seed := strings.ReplaceAll(separates[len(separates)-1], " ", "")
+		runes := []rune(seed)
+		if len(runes) > 16 {
+			runes = runes[:16]
+		}
+		if len(runes) > 0 {
+			taskIDSeed = string(runes)
+		}
+	}
+	taskID := fmt.Sprintf("%s_%s", util.SanitizePathName(taskIDSeed), util.GenerateRandStringWithUpperLowerNum(4))
+	taskID = strings.ReplaceAll(taskID, "=", "")
+	taskID = strings.ReplaceAll(taskID, "?", "")
+
 	var resultType types.SubtitleResultType
-	// 根据入参选项确定要返回的字幕类型
 	if req.TargetLang == "none" {
 		resultType = types.SubtitleResultTypeOriginOnly
 	} else {
@@ -52,7 +68,7 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 			resultType = types.SubtitleResultTypeTargetOnly
 		}
 	}
-	// 文字替换map
+
 	replaceWordsMap := make(map[string]string)
 	if len(req.Replace) > 0 {
 		for _, replace := range req.Replace {
@@ -60,45 +76,41 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 			if len(beforeAfter) == 2 {
 				replaceWordsMap[beforeAfter[0]] = beforeAfter[1]
 			} else {
-				log.GetLogger().Info("generateAudioSubtitles replace param length err", zap.Any("replace", replace), zap.Any("taskId", taskId))
+				log.GetLogger().Info("generateAudioSubtitles replace param length err", zap.Any("replace", replace), zap.Any("taskID", taskID))
 			}
 		}
 	}
+
 	var err error
 	ctx := context.Background()
-	// 创建字幕任务文件夹
-	taskBasePath := filepath.Join("./tasks", taskId)
+	taskBasePath := filepath.Join("./tasks", taskID)
 	if _, err = os.Stat(taskBasePath); os.IsNotExist(err) {
-		// 不存在则创建
 		err = os.MkdirAll(filepath.Join(taskBasePath, "output"), os.ModePerm)
 		if err != nil {
 			log.GetLogger().Error("StartVideoSubtitleTask MkdirAll err", zap.Any("req", req), zap.Error(err))
 		}
 	}
 
-	// 创建任务
 	taskPtr := &types.SubtitleTask{
-		TaskId:   taskId,
+		TaskId:   taskID,
 		VideoSrc: req.Url,
 		Status:   types.SubtitleTaskStatusProcessing,
 	}
-	storage.SubtitleTasks.Store(taskId, taskPtr)
+	storage.SubtitleTasks.Store(taskID, taskPtr)
 
-	// 处理声音克隆源
-	var voiceCloneAudioUrl string
+	var voiceCloneAudioURL string
 	if req.TtsVoiceCloneSrcFileUrl != "" {
-		localFileUrl := strings.TrimPrefix(req.TtsVoiceCloneSrcFileUrl, "local:")
-		fileKey := util.GenerateRandStringWithUpperLowerNum(5) + filepath.Ext(localFileUrl) // 防止url encode的问题，这里统一处理
-		err = s.OssClient.UploadFile(context.Background(), fileKey, localFileUrl, s.OssClient.Bucket)
+		localFileURL := strings.TrimPrefix(req.TtsVoiceCloneSrcFileUrl, "local:")
+		fileKey := util.GenerateRandStringWithUpperLowerNum(5) + filepath.Ext(localFileURL)
+		err = s.OssClient.UploadFile(context.Background(), fileKey, localFileURL, s.OssClient.Bucket)
 		if err != nil {
 			log.GetLogger().Error("StartVideoSubtitleTask UploadFile err", zap.Any("req", req), zap.Error(err))
 			return nil, errors.New("上传声音克隆源失败")
 		}
-		voiceCloneAudioUrl = fmt.Sprintf("https://%s.oss-cn-shanghai.aliyuncs.com/%s", s.OssClient.Bucket, fileKey)
-		log.GetLogger().Info("StartVideoSubtitleTask 上传声音克隆源成功", zap.Any("oss url", voiceCloneAudioUrl))
+		voiceCloneAudioURL = fmt.Sprintf("https://%s.oss-cn-shanghai.aliyuncs.com/%s", s.OssClient.Bucket, fileKey)
+		log.GetLogger().Info("StartVideoSubtitleTask 上传声音克隆源成功", zap.Any("oss url", voiceCloneAudioURL))
 	}
 
-	// 处理任务级 cookies 文件（仅当前任务使用）
 	var cookiesFilePath string
 	if req.CookiesFileUrl != "" {
 		localCookiesPath := strings.TrimPrefix(req.CookiesFileUrl, "local:")
@@ -113,10 +125,19 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 			log.GetLogger().Error("StartVideoSubtitleTask copy cookies file err", zap.Any("req", req), zap.Error(err))
 			return nil, errors.New("复制 cookies 文件失败")
 		}
+	} else {
+		globalCookiesPath := resolveCookiesPath(nil)
+		if fileExists(globalCookiesPath) {
+			cookiesFilePath = filepath.Join(taskBasePath, "cookies.txt")
+			if err = util.CopyFile(globalCookiesPath, cookiesFilePath); err != nil {
+				log.GetLogger().Warn("StartVideoSubtitleTask copy global cookies file err, fallback to original path", zap.String("globalCookiesPath", globalCookiesPath), zap.Error(err))
+				cookiesFilePath = globalCookiesPath
+			}
+		}
 	}
 
 	stepParam := types.SubtitleTaskStepParam{
-		TaskId:                  taskId,
+		TaskId:                  taskID,
 		TaskPtr:                 taskPtr,
 		TaskBasePath:            taskBasePath,
 		Link:                    req.Url,
@@ -125,7 +146,7 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 		EnableModalFilter:       req.ModalFilter == types.SubtitleTaskModalFilterYes,
 		EnableTts:               req.Tts == types.SubtitleTaskTtsYes,
 		TtsVoiceCode:            req.TtsVoiceCode,
-		VoiceCloneAudioUrl:      voiceCloneAudioUrl,
+		VoiceCloneAudioUrl:      voiceCloneAudioURL,
 		ReplaceWordsMap:         replaceWordsMap,
 		OriginLanguage:          types.StandardLanguageCode(req.OriginLanguage),
 		TargetLanguage:          types.StandardLanguageCode(req.TargetLang),
@@ -133,13 +154,13 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 		EmbedSubtitleVideoType:  req.EmbedSubtitleVideoType,
 		VerticalVideoMajorTitle: req.VerticalMajorTitle,
 		VerticalVideoMinorTitle: req.VerticalMinorTitle,
-		MaxWordOneLine:          12, // 默认值
+		MaxWordOneLine:          12,
 	}
 	if req.OriginLanguageWordOneLine != 0 {
 		stepParam.MaxWordOneLine = req.OriginLanguageWordOneLine
 	}
 
-	log.GetLogger().Info("current task info", zap.String("taskId", taskId), zap.Any("param", stepParam))
+	log.GetLogger().Info("current task info", zap.String("taskID", taskID), zap.Any("param", stepParam))
 
 	go func() {
 		defer func() {
@@ -151,8 +172,8 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 				stepParam.TaskPtr.Status = types.SubtitleTaskStatusFailed
 			}
 		}()
-		// 新版流程：链接->本地音频文件->视频信息获取（若有）->本地字幕文件->语言合成->视频合成->字幕文件链接生成
-		log.GetLogger().Info("video subtitle start task", zap.String("taskId", taskId))
+
+		log.GetLogger().Info("video subtitle start task", zap.String("taskID", taskID))
 		err = s.linkToFile(ctx, &stepParam)
 		if err != nil {
 			log.GetLogger().Error("StartVideoSubtitleTask linkToFile err", zap.Any("req", req), zap.Error(err))
@@ -160,14 +181,7 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 			stepParam.TaskPtr.FailReason = err.Error()
 			return
 		}
-		// 暂时不加视频信息
-		//err = s.getVideoInfo(ctx, &stepParam)
-		//if err != nil {
-		//	log.GetLogger().Error("StartVideoSubtitleTask getVideoInfo err", zap.Any("req", req), zap.Error(err))
-		//	stepParam.TaskPtr.Status = types.SubtitleTaskStatusFailed
-		//	stepParam.TaskPtr.FailReason = "get video info error"
-		//	return
-		//}
+
 		err = s.audioToSubtitle(ctx, &stepParam)
 		if err != nil {
 			log.GetLogger().Error("StartVideoSubtitleTask audioToSubtitle err", zap.Any("req", req), zap.Error(err))
@@ -197,12 +211,10 @@ func (s Service) StartSubtitleTask(req dto.StartVideoSubtitleTaskReq) (*dto.Star
 			return
 		}
 
-		log.GetLogger().Info("video subtitle task end", zap.String("taskId", taskId))
+		log.GetLogger().Info("video subtitle task end", zap.String("taskID", taskID))
 	}()
 
-	return &dto.StartVideoSubtitleTaskResData{
-		TaskId: taskId,
-	}, nil
+	return &dto.StartVideoSubtitleTaskResData{TaskId: taskID}, nil
 }
 
 func (s Service) GetTaskStatus(req dto.GetVideoSubtitleTaskReq) (*dto.GetVideoSubtitleTaskResData, error) {

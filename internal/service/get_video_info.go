@@ -15,7 +15,7 @@ import (
 
 func (s Service) getVideoInfo(ctx context.Context, stepParam *types.SubtitleTaskStepParam) error {
 	link := stepParam.Link
-	if isYouTubeLink(link) || strings.Contains(link, "bilibili.com") {
+	if isYouTubeLink(link) || isBilibiliLink(link) || isTwitterLink(link) {
 		var (
 			err                error
 			title, description string

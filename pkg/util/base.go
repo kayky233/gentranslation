@@ -60,6 +60,53 @@ func GetBilibiliVideoId(url string) string {
 }
 
 // 将浮点数秒数转换为HH:MM:SS,SSS格式的字符串
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func GetTwitterStatusID(rawURL string) string {
+	link := strings.TrimSpace(rawURL)
+	if link == "" {
+		return ""
+	}
+	if !strings.Contains(link, "://") {
+		link = "https://" + link
+	}
+
+	parsedURL, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+
+	host := strings.ToLower(strings.TrimPrefix(parsedURL.Host, "www."))
+	if host == "mobile.twitter.com" {
+		host = "twitter.com"
+	}
+	if host != "x.com" && host != "twitter.com" {
+		return ""
+	}
+
+	pathSegments := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
+	for i := 0; i < len(pathSegments)-1; i++ {
+		if strings.EqualFold(pathSegments[i], "status") {
+			statusID := strings.TrimSpace(pathSegments[i+1])
+			if isDigits(statusID) {
+				return statusID
+			}
+		}
+	}
+
+	return ""
+}
+
 func FormatTime(seconds float32) string {
 	totalSeconds := int(math.Floor(float64(seconds)))             // 获取总秒数
 	milliseconds := int((seconds - float32(totalSeconds)) * 1000) // 获取毫秒部分
